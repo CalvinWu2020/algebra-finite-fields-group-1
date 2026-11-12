@@ -7,8 +7,7 @@ include(FetchContent)
 
 FetchContent_Declare(
     algebra_finite_fields
-    GIT_REPOSITORY git@github.com:nathanjrussell/algebra-finite-fields.git
-    GIT_TAG v0.2.0
+    GIT_REPOSITORY git@github.com:CalvinWu2020/algebra-finite-fields-group-1.git
 )
 
 FetchContent_MakeAvailable(algebra_finite_fields)
