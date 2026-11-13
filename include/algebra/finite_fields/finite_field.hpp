@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <ostream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <algebra/finite_fields/modulus.hpp>
 
@@ -154,6 +155,13 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const FiniteFieldElement& value) {
         return out << value.value_;
     }
+
+    // custom hashing functor to allow this class to be used as a key in unordered_map
+    struct Hash {
+        std::size_t operator()(const FiniteFieldElement& elem) const noexcept {
+            return 0; // TODO
+        }
+    };
 };
 
 template<std::uint32_t P, std::size_t K, class ModulusPolicy>
@@ -162,9 +170,30 @@ class FiniteField : public FieldStructure<FiniteFieldElement<P, K, ModulusPolicy
     static_assert(K > 0);
 
 public:
+    // moved these up here
     using Element = FiniteFieldElement<P, K, ModulusPolicy>;
     using Base = PrimeField<Cyclic<P>>;
     using PolynomialType = typename Element::polynomial_type;
+
+private:
+    // alias for hash struct functor
+    using ElementHash = typename Element::Hash;
+
+    // unordered map two-operand key struct
+    struct TwoElementCacheKey {
+        Element op1;
+        Element op2;
+    };
+    
+    // unordered map operation caches, must be static because of how the template class is designed
+    static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_add;
+    static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_multiply;
+    static std::unordered_map<Element, Element, ElementHash> opcache_negate;
+    static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
+
+    friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)
+
+public:
     static constexpr std::uint32_t characteristic = P;
     static constexpr std::size_t extension_degree = K;
 
