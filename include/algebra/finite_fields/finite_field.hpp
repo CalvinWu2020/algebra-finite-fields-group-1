@@ -69,6 +69,17 @@ public:
         return from_polynomial(value);
     }
 
+    // reverse of from_index, used for hashing
+    static std::uint64_t to_index() {
+        std::uint64_t index = 0;
+        std::uint64_t place = 1;
+        for (std::size_t i = 0; i < K; ++i) {
+            index += value_.coefficient(i) * place;
+            place *= P;
+        }
+        return index;
+    }
+
     static FiniteFieldElement zero() {
         return FiniteFieldElement{};
     }
@@ -159,7 +170,7 @@ public:
     // custom hashing functor to allow this class to be used as a key in unordered_map
     struct Hash {
         std::size_t operator()(const FiniteFieldElement& elem) const noexcept {
-            return 0; // TODO
+            return to_index(); // testing with index
         }
     };
 };
@@ -186,10 +197,10 @@ private:
     };
     
     // unordered map operation caches, must be static because of how the template class is designed
-    static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_add;
-    static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_multiply;
-    static std::unordered_map<Element, Element, ElementHash> opcache_negate;
-    static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
+    inline static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_add;
+    inline static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_multiply;
+    inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
+    inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
 
     friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)
 
