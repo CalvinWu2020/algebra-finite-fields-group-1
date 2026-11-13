@@ -70,11 +70,11 @@ public:
     }
 
     // reverse of from_index, used for hashing
-    std::uint64_t to_index() {
+    std::uint64_t to_index() const {
         std::uint64_t index = 0;
         std::uint64_t place = 1;
         for (std::size_t i = 0; i < K; ++i) {
-            index += value_.coefficient(i) * place;
+            index += value_.coefficient(i).representative() * place;  // value_.coefficient() produces a RingElement, which needs representative() to get a numeric
             place *= P;
         }
         return index;
@@ -170,7 +170,7 @@ public:
     // custom hashing functor to allow this class to be used as a key in unordered_map
     struct Hash {
         std::size_t operator()(const FiniteFieldElement& elem) const noexcept {
-            return to_index(); // testing with index
+            return static_cast<std::size_t>(elem.to_index());
         }
     };
 };
