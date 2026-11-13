@@ -70,7 +70,7 @@ public:
     }
 
     // reverse of from_index, used for hashing
-    static std::uint64_t to_index() {
+    std::uint64_t to_index() {
         std::uint64_t index = 0;
         std::uint64_t place = 1;
         for (std::size_t i = 0; i < K; ++i) {
