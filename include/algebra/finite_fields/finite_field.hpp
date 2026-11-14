@@ -89,23 +89,52 @@ public:
     }
 
     FiniteFieldElement add(const FiniteFieldElement& other) const {
+        auto& cache = parent_type::opcache_add;
+        typename parent_type::TwoElementCacheKey key = {*this, other};
+
+        auto found = cache.find(key);
+        if (found != cache.end()) return found->second;
+
         const polynomial_type sum = value_.add(other.value_);
-        return from_polynomial(sum);
+        FiniteFieldElement result = from_polynomial(sum);
+        cache.emplace(key, result);
+        return result;
     }
 
     FiniteFieldElement negate() const {
-        return from_polynomial(value_.negate());
+        auto& cache = parent_type::opcache_negate;
+
+        auto found = cache.find(*this);
+        if (found != cache.end()) return found->second;
+
+        FiniteFieldElement result = from_polynomial(value_.negate());
+        cache.emplace(*this, result);
+        return result;
     }
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
+        auto& cache = parent_type::opcache_multiply;
+        typename parent_type::TwoElementCacheKey key = {*this, other};
+
+        auto found = cache.find(key);
+        if (found != cache.end()) return found->second;
+
         const polynomial_type product = value_.multiply(other.value_);
-        return from_polynomial(product);
+        FiniteFieldElement result = from_polynomial(product);
+        cache.emplace(key, result);
+        return result;
     }
 
     FiniteFieldElement reciprocal() const {
         if (is_zero()) {
             throw std::domain_error("Zero has no reciprocal");
         }
+
+        auto& cache = parent_type::opcache_reciprocal;
+
+        auto found = cache.find(*this);
+        if (found != cache.end()) return found->second;
+
         polynomial_type previous_remainder = parent_type::modulus();
         polynomial_type remainder = value_;
         polynomial_type previous_coefficient = polynomial_type::zero();
@@ -124,7 +153,10 @@ public:
             throw std::logic_error("The element is not invertible for this modulus");
         }
         const coefficient_type scale = previous_remainder.coefficient(0).reciprocal();
-        return from_polynomial(previous_coefficient.scale_left(scale));
+        FiniteFieldElement result = from_polynomial(previous_coefficient.scale_left(scale));
+
+        cache.emplace(*this, result);
+        return result;
     }
 
     bool is_zero() const {
@@ -194,11 +226,24 @@ private:
     struct TwoElementCacheKey {
         Element op1;
         Element op2;
+
+        bool operator==(const TwoElementCacheKey& other) const {
+            return (op1 == other.op1) && (op2 == other.op2);
+        }
+
+        struct Hash {
+            std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
+                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
+                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
+                return h1 + h2;
+            }
+        };
     };
+    using TwoElementCacheKeyHash = typename TwoElementCacheKey::Hash;
     
     // unordered map operation caches, must be static because of how the template class is designed
-    inline static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_add;
-    inline static std::unordered_map<TwoElementCacheKey, Element, ElementHash> opcache_multiply;
+    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_add;
+    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_multiply;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
 
