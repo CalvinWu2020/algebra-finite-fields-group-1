@@ -235,7 +235,7 @@ private:
             std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
                 std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
                 std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
-                return h1 + h2;
+                return h1 + (h2 * P * K);
             }
         };
     };
