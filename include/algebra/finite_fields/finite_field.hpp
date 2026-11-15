@@ -222,25 +222,6 @@ private:
     // alias for hash struct functor
     using ElementHash = typename Element::Hash;
 
-    // unordered map two-operand key struct
-    struct TwoElementCacheKey {
-        Element op1;
-        Element op2;
-
-        bool operator==(const TwoElementCacheKey& other) const {
-            return (op1 == other.op1) && (op2 == other.op2);
-        }
-
-        struct Hash {
-            std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
-                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
-                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
-                return h1 + h2 * static_cast<std::size_t>(checked_power(P, K));
-            }
-        };
-    };
-    using TwoElementCacheKeyHash = typename TwoElementCacheKey::Hash;
-    
     // unordered map operation caches, must be static because of how the template class is designed
     inline static std::unordered_map<std::uint64_t, Element> opcache_add;
     inline static std::unordered_map<std::uint64_t, Element> opcache_multiply;
