@@ -90,7 +90,7 @@ public:
 
     FiniteFieldElement add(const FiniteFieldElement& other) const {
         auto& cache = parent_type::opcache_add;
-        typename parent_type::TwoElementCacheKey key = {*this, other};
+        const std::uint64_t key = to_index() * parent_type::cardinality() + other.to_index();
 
         auto found = cache.find(key);
         if (found != cache.end()) return found->second;
@@ -114,7 +114,7 @@ public:
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
         auto& cache = parent_type::opcache_multiply;
-        typename parent_type::TwoElementCacheKey key = {*this, other};
+        const std::uint64_t key = to_index() * parent_type::cardinality() + other.to_index();
 
         auto found = cache.find(key);
         if (found != cache.end()) return found->second;
@@ -242,8 +242,8 @@ private:
     using TwoElementCacheKeyHash = typename TwoElementCacheKey::Hash;
     
     // unordered map operation caches, must be static because of how the template class is designed
-    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_add;
-    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_multiply;
+    inline static std::unordered_map<std::uint64_t, Element> opcache_add;
+    inline static std::unordered_map<std::uint64_t, Element> opcache_multiply;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
 
