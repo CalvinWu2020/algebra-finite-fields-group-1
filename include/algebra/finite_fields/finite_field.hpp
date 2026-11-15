@@ -7,6 +7,7 @@
 #include <ostream>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 #include <utility>
 #include <algebra/finite_fields/modulus.hpp>
 
@@ -90,14 +91,19 @@ public:
 
     FiniteFieldElement add(const FiniteFieldElement& other) const {
         auto& cache = parent_type::opcache_add;
+        auto& known = parent_type::opknown_add;
         const std::uint64_t key = to_index() * parent_type::cardinality() + other.to_index();
+        if (cache.empty()) {  // first use: one slot per (a, b) pair
+            cache.resize(parent_type::cardinality() * parent_type::cardinality());
+            known.assign(cache.size(), false);
+        }
 
-        auto found = cache.find(key);
-        if (found != cache.end()) return found->second;
+        if (known[key]) return cache[key];
 
         const polynomial_type sum = value_.add(other.value_);
         FiniteFieldElement result = from_polynomial(sum);
-        cache.emplace(key, result);
+        cache[key] = result;
+        known[key] = true;
         return result;
     }
 
@@ -114,14 +120,19 @@ public:
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
         auto& cache = parent_type::opcache_multiply;
+        auto& known = parent_type::opknown_multiply;
         const std::uint64_t key = to_index() * parent_type::cardinality() + other.to_index();
+        if (cache.empty()) {  // first use: one slot per (a, b) pair
+            cache.resize(parent_type::cardinality() * parent_type::cardinality());
+            known.assign(cache.size(), false);
+        }
 
-        auto found = cache.find(key);
-        if (found != cache.end()) return found->second;
+        if (known[key]) return cache[key];
 
         const polynomial_type product = value_.multiply(other.value_);
         FiniteFieldElement result = from_polynomial(product);
-        cache.emplace(key, result);
+        cache[key] = result;
+        known[key] = true;
         return result;
     }
 
@@ -223,8 +234,10 @@ private:
     using ElementHash = typename Element::Hash;
 
     // unordered map operation caches, must be static because of how the template class is designed
-    inline static std::unordered_map<std::uint64_t, Element> opcache_add;
-    inline static std::unordered_map<std::uint64_t, Element> opcache_multiply;
+    inline static std::vector<Element> opcache_add;
+    inline static std::vector<bool> opknown_add;
+    inline static std::vector<Element> opcache_multiply;
+    inline static std::vector<bool> opknown_multiply;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
     inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
 
