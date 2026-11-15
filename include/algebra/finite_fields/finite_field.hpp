@@ -88,14 +88,28 @@ public:
         return from_integer(1);
     }
 
-
     FiniteFieldElement add(const FiniteFieldElement& other) const {
+        auto& cache = parent_type::opcache_add;
+        typename parent_type::TwoElementCacheKey key = {*this, other};
+
+        auto found = cache.find(key);
+        if (found != cache.end()) return found->second;
+
         const polynomial_type sum = value_.add(other.value_);
-        return from_polynomial(sum);
+        FiniteFieldElement result = from_polynomial(sum);
+        cache.emplace(key, result);
+        return result;
     }
 
     FiniteFieldElement negate() const {
-        return from_polynomial(value_.negate());
+        auto& cache = parent_type::opcache_negate;
+
+        auto found = cache.find(*this);
+        if (found != cache.end()) return found->second;
+
+        FiniteFieldElement result = from_polynomial(value_.negate());
+        cache.emplace(*this, result);
+        return result;
     }
 
 
