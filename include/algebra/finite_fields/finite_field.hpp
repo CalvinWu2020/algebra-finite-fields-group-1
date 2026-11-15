@@ -218,10 +218,10 @@ private:
 
         struct Hash {
             std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
-                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
-                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
-                h1 ^= h2 + static_cast<std::size_t>(0x9e3779b9u) + (h1 << 6) + (h1 >> 2);
-                return h1;
+                std::size_t seed = std::hash<std::uint64_t>{}(key.op1);
+                const std::size_t h2 = std::hash<std::uint64_t>{}(key.op2);
+                seed ^= h2 + static_cast<std::size_t>(0x9e3779b9u) + (seed << 6) + (seed >> 2);
+                return seed;
             }
         };
     };
