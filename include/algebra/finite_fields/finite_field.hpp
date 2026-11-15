@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <mutex>
 #include <ostream>
 #include <stdexcept>
 #include <unordered_map>
@@ -69,17 +71,6 @@ public:
         return from_polynomial(value);
     }
 
-    // reverse of from_index, used for hashing
-    std::uint64_t to_index() const {
-        std::uint64_t index = 0;
-        std::uint64_t place = 1;
-        for (std::size_t i = 0; i < K; ++i) {
-            index += value_.coefficient(i).representative() * place;  // value_.coefficient() produces a RingElement, which needs representative() to get a numeric
-            place *= P;
-        }
-        return index;
-    }
-
     static FiniteFieldElement zero() {
         return FiniteFieldElement{};
     }
@@ -98,16 +89,8 @@ public:
     }
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
-        auto& cache = parent_type::opcache_multiply;
-        typename parent_type::TwoElementCacheKey key = {*this, other};
-
-        auto found = cache.find(key);
-        if (found != cache.end()) return found->second;
-
         const polynomial_type product = value_.multiply(other.value_);
-        FiniteFieldElement result = from_polynomial(product);
-        cache.emplace(key, result);
-        return result;
+        return from_polynomial(product);
     }
 
     FiniteFieldElement reciprocal() const {
@@ -115,10 +98,39 @@ public:
             throw std::domain_error("Zero has no reciprocal");
         }
 
-        auto& cache = parent_type::opcache_reciprocal;
+        struct InverseCache {
+            std::mutex mutex;
+            std::unordered_map<std::uint64_t, FiniteFieldElement> values;
+            std::array<std::uint64_t, 128> eviction_order{};
+            std::size_t next_eviction = 0;
+        };
+        static InverseCache cache;
 
-        auto found = cache.find(*this);
-        if (found != cache.end()) return found->second;
+        std::uint64_t index = 0;
+        std::uint64_t place_value = 1;
+        bool index_is_representable = true;
+        for (std::size_t i = 0; i < K; ++i) {
+            const std::uint64_t digit = value_.coefficient(i).representative();
+            if (digit > (std::numeric_limits<std::uint64_t>::max() - index) / place_value) {
+                index_is_representable = false;
+                break;
+            }
+            index += digit * place_value;
+            if (i + 1 < K) {
+                if (place_value > std::numeric_limits<std::uint64_t>::max() / P) {
+                    index_is_representable = false;
+                    break;
+                }
+                place_value *= P;
+            }
+        }
+        if (index_is_representable) {
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto cached = cache.values.find(index);
+            if (cached != cache.values.end()) {
+                return cached->second;
+            }
+        }
 
         polynomial_type previous_remainder = parent_type::modulus();
         polynomial_type remainder = value_;
@@ -138,10 +150,21 @@ public:
             throw std::logic_error("The element is not invertible for this modulus");
         }
         const coefficient_type scale = previous_remainder.coefficient(0).reciprocal();
-        FiniteFieldElement result = from_polynomial(previous_coefficient.scale_left(scale));
-
-        cache.emplace(*this, result);
-        return result;
+        FiniteFieldElement inverse = from_polynomial(previous_coefficient.scale_left(scale));
+        if (index_is_representable) {
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            const auto cached = cache.values.find(index);
+            if (cached != cache.values.end()) {
+                return cached->second;
+            }
+            if (cache.values.size() == cache.eviction_order.size()) {
+                cache.values.erase(cache.eviction_order[cache.next_eviction]);
+            }
+            cache.eviction_order[cache.next_eviction] = index;
+            cache.next_eviction = (cache.next_eviction + 1) % cache.eviction_order.size();
+            cache.values.emplace(index, inverse);
+        }
+        return inverse;
     }
 
     bool is_zero() const {
@@ -183,13 +206,6 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const FiniteFieldElement& value) {
         return out << value.value_;
     }
-
-    // custom hashing functor to allow this class to be used as a key in unordered_map
-    struct Hash {
-        std::size_t operator()(const FiniteFieldElement& elem) const noexcept {
-            return static_cast<std::size_t>(elem.to_index());
-        }
-    };
 };
 
 template<std::uint32_t P, std::size_t K, class ModulusPolicy>
@@ -198,43 +214,9 @@ class FiniteField : public FieldStructure<FiniteFieldElement<P, K, ModulusPolicy
     static_assert(K > 0);
 
 public:
-    // moved these up here
     using Element = FiniteFieldElement<P, K, ModulusPolicy>;
     using Base = PrimeField<Cyclic<P>>;
     using PolynomialType = typename Element::polynomial_type;
-
-private:
-    // alias for hash struct functor
-    using ElementHash = typename Element::Hash;
-
-    // unordered map two-operand key struct
-    struct TwoElementCacheKey {
-        Element op1;
-        Element op2;
-
-        bool operator==(const TwoElementCacheKey& other) const {
-            return (op1 == other.op1) && (op2 == other.op2);
-        }
-
-        struct Hash {
-            std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
-                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
-                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
-                return h1 + (h2 * checked_power(P, K));
-            }
-        };
-    };
-    using TwoElementCacheKeyHash = typename TwoElementCacheKey::Hash;
-    
-    // unordered map operation caches, must be static because of how the template class is designed
-    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_add;
-    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_multiply;
-    inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
-    inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
-
-    friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)
-
-public:
     static constexpr std::uint32_t characteristic = P;
     static constexpr std::size_t extension_degree = K;
 
