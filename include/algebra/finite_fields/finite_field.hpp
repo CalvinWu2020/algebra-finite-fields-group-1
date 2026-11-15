@@ -4,8 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <limits>
-#include <mutex>
 #include <ostream>
 #include <stdexcept>
 #include <unordered_map>
@@ -31,19 +29,30 @@ public:
     using polynomial_type = Polynomial<coefficient_type>;
 
 private:
-    polynomial_type value_;
+    std::uint64_t index_ = 0;
     struct Reduced {};
 
-    FiniteFieldElement(polynomial_type value, Reduced) : value_(std::move(value)) {}
+    FiniteFieldElement(std::uint64_t index, Reduced) : index_(index) {}
 
 public:
     FiniteFieldElement() {
         static_cast<void>(parent_type::modulus());
     }
 
+    static std::uint64_t index_of_reduced_polynomial(const polynomial_type& value) {
+        std::uint64_t index = 0;
+        std::uint64_t place = 1;
+
+        for (std::size_t i = 0; i < K; ++i) {
+            index += value.coefficient(i).representative() * place;
+            place *= P;
+        }
+        return index;
+    }
+
     static FiniteFieldElement from_polynomial(const polynomial_type& value) {
-        polynomial_type remainder = value % parent_type::modulus();
-        return FiniteFieldElement(std::move(remainder), Reduced{});
+        const polynomial_type remainder = value % parent_type::modulus();
+        return FiniteFieldElement(index_of_reduced_polynomial(remainder), Reduced{});
     }
 
     static FiniteFieldElement from_coefficients(std::initializer_list<std::int64_t> values) {
@@ -56,19 +65,20 @@ public:
     }
 
     static FiniteFieldElement from_integer(std::int64_t value) {
-        return from_polynomial(polynomial_type{coefficient_type::from_integer(value)});
+        const auto coefficient = coefficient_type::from_integer(value).representative();
+        return FiniteFieldElement(coefficient, Reduced{});
     }
 
     static FiniteFieldElement from_index(std::uint64_t index) {
         if (index >= parent_type::cardinality()) {
             throw std::out_of_range("Finite field element index is out of range");
         }
-        polynomial_type value;
-        for (std::size_t i = 0; i < K; ++i) {
-            value.set_coefficient(i, coefficient_type::from_index(index % P));
-            index /= P;
-        }
-        return from_polynomial(value);
+        return FiniteFieldElement(index, Reduced{});
+    }
+
+    // reverse of from_index, used for hashing
+    std::uint64_t to_index() const {
+        return index_;
     }
 
     static FiniteFieldElement zero() {
@@ -80,16 +90,42 @@ public:
     }
 
     FiniteFieldElement add(const FiniteFieldElement& other) const {
-        const polynomial_type sum = value_.add(other.value_);
-        return from_polynomial(sum);
+        std::uint64_t left = index_;
+        std::uint64_t right = other.index_;
+        std::uint64_t result = 0;
+        std::uint64_t place = 1;
+
+        for (std::size_t i = 0; i < K; ++i) {
+            const auto sum = (left % P + right % P) % P;
+            result += sum * place;
+            left /= P;
+            right /= P;
+            place *= P;
+        }
+
+        return FiniteFieldElement(result, Reduced{});
     }
 
     FiniteFieldElement negate() const {
-        return from_polynomial(value_.negate());
+        auto& cache = parent_type::opcache_negate;
+
+        auto found = cache.find(*this);
+        if (found != cache.end()) return found->second;
+
+        FiniteFieldElement result = from_polynomial(value_.negate());
+        cache.emplace(*this, result);
+        return result;
     }
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
-        const polynomial_type product = value_.multiply(other.value_);
+        const auto q = parent_type::cardinality();
+
+        if (q <= 2048) {
+            const auto& table = multiplication_table();
+            return FiniteFieldElement(table[index_ * q + other.index_], Reduced{});
+        }
+
+        const auto product = representative().multiply(other.representative());
         return from_polynomial(product);
     }
 
@@ -98,39 +134,10 @@ public:
             throw std::domain_error("Zero has no reciprocal");
         }
 
-        struct InverseCache {
-            std::mutex mutex;
-            std::unordered_map<std::uint64_t, FiniteFieldElement> values;
-            std::array<std::uint64_t, 128> eviction_order{};
-            std::size_t next_eviction = 0;
-        };
-        static InverseCache cache;
+        auto& cache = parent_type::opcache_reciprocal;
 
-        std::uint64_t index = 0;
-        std::uint64_t place_value = 1;
-        bool index_is_representable = true;
-        for (std::size_t i = 0; i < K; ++i) {
-            const std::uint64_t digit = value_.coefficient(i).representative();
-            if (digit > (std::numeric_limits<std::uint64_t>::max() - index) / place_value) {
-                index_is_representable = false;
-                break;
-            }
-            index += digit * place_value;
-            if (i + 1 < K) {
-                if (place_value > std::numeric_limits<std::uint64_t>::max() / P) {
-                    index_is_representable = false;
-                    break;
-                }
-                place_value *= P;
-            }
-        }
-        if (index_is_representable) {
-            std::lock_guard<std::mutex> lock(cache.mutex);
-            const auto cached = cache.values.find(index);
-            if (cached != cache.values.end()) {
-                return cached->second;
-            }
-        }
+        auto found = cache.find(*this);
+        if (found != cache.end()) return found->second;
 
         polynomial_type previous_remainder = parent_type::modulus();
         polynomial_type remainder = value_;
@@ -150,21 +157,10 @@ public:
             throw std::logic_error("The element is not invertible for this modulus");
         }
         const coefficient_type scale = previous_remainder.coefficient(0).reciprocal();
-        FiniteFieldElement inverse = from_polynomial(previous_coefficient.scale_left(scale));
-        if (index_is_representable) {
-            std::lock_guard<std::mutex> lock(cache.mutex);
-            const auto cached = cache.values.find(index);
-            if (cached != cache.values.end()) {
-                return cached->second;
-            }
-            if (cache.values.size() == cache.eviction_order.size()) {
-                cache.values.erase(cache.eviction_order[cache.next_eviction]);
-            }
-            cache.eviction_order[cache.next_eviction] = index;
-            cache.next_eviction = (cache.next_eviction + 1) % cache.eviction_order.size();
-            cache.values.emplace(index, inverse);
-        }
-        return inverse;
+        FiniteFieldElement result = from_polynomial(previous_coefficient.scale_left(scale));
+
+        cache.emplace(*this, result);
+        return result;
     }
 
     bool is_zero() const {
@@ -206,6 +202,13 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const FiniteFieldElement& value) {
         return out << value.value_;
     }
+
+    // custom hashing functor to allow this class to be used as a key in unordered_map
+    struct Hash {
+        std::size_t operator()(const FiniteFieldElement& elem) const noexcept {
+            return static_cast<std::size_t>(elem.to_index());
+        }
+    };
 };
 
 template<std::uint32_t P, std::size_t K, class ModulusPolicy>
@@ -214,9 +217,43 @@ class FiniteField : public FieldStructure<FiniteFieldElement<P, K, ModulusPolicy
     static_assert(K > 0);
 
 public:
+    // moved these up here
     using Element = FiniteFieldElement<P, K, ModulusPolicy>;
     using Base = PrimeField<Cyclic<P>>;
     using PolynomialType = typename Element::polynomial_type;
+
+private:
+    // alias for hash struct functor
+    using ElementHash = typename Element::Hash;
+
+    // unordered map two-operand key struct
+    struct TwoElementCacheKey {
+        Element op1;
+        Element op2;
+
+        bool operator==(const TwoElementCacheKey& other) const {
+            return (op1 == other.op1) && (op2 == other.op2);
+        }
+
+        struct Hash {
+            std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
+                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
+                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
+                return h1 + (h2 * P * K);
+            }
+        };
+    };
+    using TwoElementCacheKeyHash = typename TwoElementCacheKey::Hash;
+    
+    // unordered map operation caches, must be static because of how the template class is designed
+    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_add;
+    inline static std::unordered_map<TwoElementCacheKey, Element, TwoElementCacheKeyHash> opcache_multiply;
+    inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
+    inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
+
+    friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)
+
+public:
     static constexpr std::uint32_t characteristic = P;
     static constexpr std::size_t extension_degree = K;
 
@@ -262,6 +299,28 @@ public:
 
     static Element alpha() {
         return Element::from_polynomial(PolynomialType::variable());
+    }
+
+    static const std::vector<std::uint16_t>& multiplication_table() {
+        static const auto table = [] {
+            const auto q = parent_type::cardinality();
+            std::vector<std::uint16_t> result(q * q);
+
+            for (std::uint64_t a = 0; a < q; ++a) {
+                for (std::uint64_t b = 0; b < q; ++b) {
+                    const auto left = from_index(a).representative();
+                    const auto right = from_index(b).representative();
+                    const auto product =
+                        (left.multiply(right) % parent_type::modulus());
+
+                    result[a * q + b] =
+                        static_cast<std::uint16_t>(index_of_reduced_polynomial(product));
+                }
+            }
+            return result;
+        }();
+
+        return table;
     }
 };
 
