@@ -101,13 +101,7 @@ public:
 
     FiniteFieldElement multiply(const FiniteFieldElement& other) const {
         auto& cache = parent_type::opcache_multiply;
-        
-        auto left = to_index();
-        auto right = other.to_index();
-        if (left > right) {
-             std::swap(left, right);
-        }
-        typename parent_type::TwoElementCacheKey key = {left, right};
+        typename parent_type::TwoElementCacheKey key = {*this, other};
 
         auto found = cache.find(key);
         if (found != cache.end()) return found->second;
@@ -217,8 +211,8 @@ private:
 
     // unordered map two-operand key struct
     struct TwoElementCacheKey {
-        std::uint64_t op1;
-        std::uint64_t op2;
+        Element op1;
+        Element op2;
 
         bool operator==(const TwoElementCacheKey& other) const {
             return (op1 == other.op1) && (op2 == other.op2);
@@ -226,8 +220,8 @@ private:
 
         struct Hash {
             std::size_t operator()(const TwoElementCacheKey& key) const noexcept {
-                std::size_t h1 = static_cast<std::size_t>(key.op1);
-                std::size_t h2 = static_cast<std::size_t>(key.op2);
+                std::size_t h1 = static_cast<std::size_t>(key.op1.to_index());
+                std::size_t h2 = static_cast<std::size_t>(key.op2.to_index());
                 return h1 + (h2 * P * K);
             }
         };
