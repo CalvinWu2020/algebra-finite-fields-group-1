@@ -11,13 +11,22 @@
 #include <utility>
 #include <algebra/finite_fields/modulus.hpp>
 
+
+// MSVC pads a class that has several empty base classes unless told not to,
+// which would make each element 4x bigger than its index. GCC/Clang don't need this.
+#if defined(_MSC_VER)
+#define ALGEBRA_EMPTY_BASES __declspec(empty_bases)
+#else
+#define ALGEBRA_EMPTY_BASES
+#endif
+
 namespace algebra {
 
 template<std::uint32_t P, std::size_t K = 1, class ModulusPolicy = FirstEnumeratedIrreducible>
 class FiniteField;
 
 template<std::uint32_t P, std::size_t K, class ModulusPolicy>
-class FiniteFieldElement : public AdditiveOperators<FiniteFieldElement<P, K, ModulusPolicy>>,
+class ALGEBRA_EMPTY_BASES FiniteFieldElement : public AdditiveOperators<FiniteFieldElement<P, K, ModulusPolicy>>,
                            public MultiplicativeOperators<FiniteFieldElement<P, K, ModulusPolicy>>,
                            public DivisionOperators<FiniteFieldElement<P, K, ModulusPolicy>> {
     static_assert(is_prime(P));
@@ -30,10 +39,10 @@ public:
     using polynomial_type = Polynomial<coefficient_type>;
 
 private:
-    std::uint32_t index_ = 0;  // which element this is: same numbering as from_index / to_index
+    std::uint16_t index_ = 0;  // which element this is: same numbering as from_index / to_index
     struct Reduced {};
 
-    FiniteFieldElement(std::uint32_t index, Reduced) : index_(index) {}
+    FiniteFieldElement(std::uint16_t index, Reduced) : index_(index) {}
 
     // this element's reduced polynomial, looked up in a table built once per field
     const polynomial_type& value() const {
@@ -41,14 +50,14 @@ private:
     }
 
     // reverse of from_index for an already-reduced polynomial
-    static std::uint32_t encode(const polynomial_type& reduced) {
+    static std::uint16_t encode(const polynomial_type& reduced) {
         std::uint32_t index = 0;
         std::uint32_t place = 1;
         for (std::size_t i = 0; i < K; ++i) {
             index += reduced.coefficient(i).representative() * place;
             place *= P;
         }
-        return index;
+        return static_cast<std::uint16_t>(index);
     }
 
 public:
@@ -270,13 +279,13 @@ private:
     }
 
     // operation caches: each slot holds the result's index, must be static because of how the template class is designed
-    inline static std::vector<std::uint32_t> opcache_add;
+    inline static std::vector<std::uint16_t> opcache_add;
     inline static std::vector<bool> opknown_add;
-    inline static std::vector<std::uint32_t> opcache_multiply;
+    inline static std::vector<std::uint16_t> opcache_multiply;
     inline static std::vector<bool> opknown_multiply;
-    inline static std::vector<std::uint32_t> opcache_negate;
+    inline static std::vector<std::uint16_t> opcache_negate;
     inline static std::vector<bool> opknown_negate;
-    inline static std::vector<std::uint32_t> opcache_reciprocal;
+    inline static std::vector<std::uint16_t> opcache_reciprocal;
     inline static std::vector<bool> opknown_reciprocal;
 
     friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)

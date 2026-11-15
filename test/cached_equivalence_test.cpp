@@ -13,6 +13,7 @@ using F = FiniteField<11, 3>;
 using E = F::Element;
 using Poly = F::PolynomialType;
 const std::uint64_t n = F::cardinality();  // 1331
+static_assert(sizeof(E) == 2, "each element should be just its 2-byte index");
 
 // The original algorithm: polynomial math, then reduce by the modulus. Never touches the caches.
 Poly reduce(const Poly& p) {
