@@ -89,6 +89,7 @@ public:
     }
 
     FiniteFieldElement add(const FiniteFieldElement& other) const {
+        std::cout << "improve hash" << '\n';
         auto& cache = parent_type::opcache_add;
         typename parent_type::TwoElementCacheKey key = {*this, other};
 
