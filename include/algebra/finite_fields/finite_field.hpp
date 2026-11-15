@@ -30,10 +30,26 @@ public:
     using polynomial_type = Polynomial<coefficient_type>;
 
 private:
-    polynomial_type value_;
+    std::uint32_t index_ = 0;  // which element this is: same numbering as from_index / to_index
     struct Reduced {};
 
-    FiniteFieldElement(polynomial_type value, Reduced) : value_(std::move(value)) {}
+    FiniteFieldElement(std::uint32_t index, Reduced) : index_(index) {}
+
+    // this element's reduced polynomial, looked up in a table built once per field
+    const polynomial_type& value() const {
+        return parent_type::polynomials()[index_];
+    }
+
+    // reverse of from_index for an already-reduced polynomial
+    static std::uint32_t encode(const polynomial_type& reduced) {
+        std::uint32_t index = 0;
+        std::uint32_t place = 1;
+        for (std::size_t i = 0; i < K; ++i) {
+            index += reduced.coefficient(i).representative() * place;
+            place *= P;
+        }
+        return index;
+    }
 
 public:
     FiniteFieldElement() {
@@ -41,8 +57,8 @@ public:
     }
 
     static FiniteFieldElement from_polynomial(const polynomial_type& value) {
-        polynomial_type remainder = value % parent_type::modulus();
-        return FiniteFieldElement(std::move(remainder), Reduced{});
+        const polynomial_type remainder = value % parent_type::modulus();
+        return FiniteFieldElement(encode(remainder), Reduced{});
     }
 
     static FiniteFieldElement from_coefficients(std::initializer_list<std::int64_t> values) {
@@ -72,13 +88,7 @@ public:
 
     // reverse of from_index, used for hashing
     std::uint64_t to_index() const {
-        std::uint64_t index = 0;
-        std::uint64_t place = 1;
-        for (std::size_t i = 0; i < K; ++i) {
-            index += value_.coefficient(i).representative() * place;  // value_.coefficient() produces a RingElement, which needs representative() to get a numeric
-            place *= P;
-        }
-        return index;
+        return index_;
     }
 
     static FiniteFieldElement zero() {
@@ -98,23 +108,28 @@ public:
             known.assign(cache.size(), false);
         }
 
-        if (known[key]) return cache[key];
+        if (known[key]) return FiniteFieldElement(cache[key], Reduced{});
 
-        const polynomial_type sum = value_.add(other.value_);
+        const polynomial_type sum = value().add(other.value());
         FiniteFieldElement result = from_polynomial(sum);
-        cache[key] = result;
+        cache[key] = result.index_;
         known[key] = true;
         return result;
     }
 
     FiniteFieldElement negate() const {
         auto& cache = parent_type::opcache_negate;
+        auto& known = parent_type::opknown_negate;
+        if (cache.empty()) {  // first use: one slot per element
+            cache.resize(parent_type::cardinality());
+            known.assign(cache.size(), false);
+        }
 
-        auto found = cache.find(*this);
-        if (found != cache.end()) return found->second;
+        if (known[index_]) return FiniteFieldElement(cache[index_], Reduced{});
 
-        FiniteFieldElement result = from_polynomial(value_.negate());
-        cache.emplace(*this, result);
+        FiniteFieldElement result = from_polynomial(value().negate());
+        cache[index_] = result.index_;
+        known[index_] = true;
         return result;
     }
 
@@ -127,11 +142,11 @@ public:
             known.assign(cache.size(), false);
         }
 
-        if (known[key]) return cache[key];
+        if (known[key]) return FiniteFieldElement(cache[key], Reduced{});
 
-        const polynomial_type product = value_.multiply(other.value_);
+        const polynomial_type product = value().multiply(other.value());
         FiniteFieldElement result = from_polynomial(product);
-        cache[key] = result;
+        cache[key] = result.index_;
         known[key] = true;
         return result;
     }
@@ -142,12 +157,16 @@ public:
         }
 
         auto& cache = parent_type::opcache_reciprocal;
+        auto& known = parent_type::opknown_reciprocal;
+        if (cache.empty()) {  // first use: one slot per element
+            cache.resize(parent_type::cardinality());
+            known.assign(cache.size(), false);
+        }
 
-        auto found = cache.find(*this);
-        if (found != cache.end()) return found->second;
+        if (known[index_]) return FiniteFieldElement(cache[index_], Reduced{});
 
         polynomial_type previous_remainder = parent_type::modulus();
-        polynomial_type remainder = value_;
+        polynomial_type remainder = value();
         polynomial_type previous_coefficient = polynomial_type::zero();
         polynomial_type coefficient = polynomial_type::one();
         while (!remainder.is_zero()) {
@@ -166,35 +185,36 @@ public:
         const coefficient_type scale = previous_remainder.coefficient(0).reciprocal();
         FiniteFieldElement result = from_polynomial(previous_coefficient.scale_left(scale));
 
-        cache.emplace(*this, result);
+        cache[index_] = result.index_;
+        known[index_] = true;
         return result;
     }
 
     bool is_zero() const {
-        return value_.is_zero();
+        return index_ == 0;
     }
 
     bool is_one() const {
-        return value_.is_one();
+        return index_ == 1;
     }
 
     coefficient_type coefficient(std::size_t index) const {
         if (index >= K) {
             throw std::out_of_range("Finite field coefficient index is out of range");
         }
-        return value_.coefficient(index);
+        return value().coefficient(index);
     }
 
     std::array<coefficient_type, K> coefficients() const {
         std::array<coefficient_type, K> result{};
         for (std::size_t i = 0; i < K; ++i) {
-            result[i] = value_.coefficient(i);
+            result[i] = value().coefficient(i);
         }
         return result;
     }
 
     const polynomial_type& representative() const {
-        return value_;
+        return value();
     }
 
     const parent_type& parent() const {
@@ -203,11 +223,11 @@ public:
     }
 
     bool operator==(const FiniteFieldElement& other) const {
-        return value_ == other.value_;
+        return index_ == other.index_;
     }
 
     friend std::ostream& operator<<(std::ostream& out, const FiniteFieldElement& value) {
-        return out << value.value_;
+        return out << value.value();
     }
 
     // custom hashing functor to allow this class to be used as a key in unordered_map
@@ -233,13 +253,31 @@ private:
     // alias for hash struct functor
     using ElementHash = typename Element::Hash;
 
-    // unordered map operation caches, must be static because of how the template class is designed
-    inline static std::vector<Element> opcache_add;
+    // every reduced polynomial in the field, in from_index order (element i is polynomials()[i])
+    static const std::vector<PolynomialType>& polynomials() {
+        static const std::vector<PolynomialType> table = [] {
+            std::vector<PolynomialType> all(static_cast<std::size_t>(cardinality()));
+            for (std::size_t i = 0; i < all.size(); ++i) {
+                std::uint64_t digits = i;
+                for (std::size_t d = 0; d < K; ++d) {
+                    all[i].set_coefficient(d, Element::coefficient_type::from_index(digits % P));
+                    digits /= P;
+                }
+            }
+            return all;
+        }();
+        return table;
+    }
+
+    // operation caches: each slot holds the result's index, must be static because of how the template class is designed
+    inline static std::vector<std::uint32_t> opcache_add;
     inline static std::vector<bool> opknown_add;
-    inline static std::vector<Element> opcache_multiply;
+    inline static std::vector<std::uint32_t> opcache_multiply;
     inline static std::vector<bool> opknown_multiply;
-    inline static std::unordered_map<Element, Element, ElementHash> opcache_negate;
-    inline static std::unordered_map<Element, Element, ElementHash> opcache_reciprocal;
+    inline static std::vector<std::uint32_t> opcache_negate;
+    inline static std::vector<bool> opknown_negate;
+    inline static std::vector<std::uint32_t> opcache_reciprocal;
+    inline static std::vector<bool> opknown_reciprocal;
 
     friend Element;  // allows the finite field element to access these (if we add more priv fields, might rethink this)
 
